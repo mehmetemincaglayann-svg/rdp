@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: pyremote-relay
+    runtime: docker
+    plan: free
+    healthCheckPath: /

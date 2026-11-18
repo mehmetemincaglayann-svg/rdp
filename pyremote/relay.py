@@ -12,6 +12,7 @@ import hashlib
 import hmac
 import json
 import logging
+import os
 import secrets
 import ssl
 import time
@@ -165,11 +166,17 @@ class Relay:
             await asyncio.gather(a.close(), b.close(), return_exceptions=True)
 
 
+def _health_check(connection, request):
+    """Düz HTTP isteklerine (bulut hizmetlerinin sağlık denetimi) 200 döndürür."""
+    if request.headers.get("Upgrade", "").lower() != "websocket":
+        return connection.respond(200, "PyRemote aktarma sunucusu calisiyor\n")
+
+
 async def run_relay(host: str, port: int, registry: Path | None = None,
                     ssl_context=None, ready: asyncio.Event | None = None):
     relay = Relay(registry)
     async with serve(relay.handle, host, port, max_size=MAX_WS_MESSAGE,
-                     ssl=ssl_context, ping_interval=20, ping_timeout=30):
+                     ssl=ssl_context, process_request=_health_check, ping_interval=20, ping_timeout=30):
         log.info("aktarma sunucusu dinliyor: %s:%d", host, port)
         if ready:
             ready.set()
@@ -179,7 +186,8 @@ async def run_relay(host: str, port: int, registry: Path | None = None,
 def main():
     ap = argparse.ArgumentParser(description="PyRemote aktarma sunucusu")
     ap.add_argument("--host", default="0.0.0.0")
-    ap.add_argument("--port", type=int, default=8765)
+    ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", 8765)),
+                    help="bağlantı noktası (varsayılan: PORT ortam değişkeni ya da 8765)")
     ap.add_argument("--data", default="relay_registry.json", help="ID kayıt dosyası")
     ap.add_argument("--cert", help="TLS sertifikası (wss:// için)")
     ap.add_argument("--key", help="TLS özel anahtarı")

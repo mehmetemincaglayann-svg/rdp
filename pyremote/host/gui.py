@@ -57,8 +57,11 @@ class HostApp:
                                                          sticky="w", **pad)
         self.perm_btn = ttk.Button(main, command=self._toggle_permanent)
         self.perm_btn.grid(row=5, column=2, **pad)
-        ttk.Label(main, text=f"Sunucu: {self.config.relay}", foreground="#666"
-                  ).grid(row=6, column=0, columnspan=3, sticky="w", **pad)
+        self.relay_var = tk.StringVar(master=self.root)
+        ttk.Label(main, textvariable=self.relay_var, foreground="#666"
+                  ).grid(row=6, column=0, columnspan=2, sticky="w", **pad)
+        ttk.Button(main, text="Sunucu adresi…", command=self._change_relay
+                   ).grid(row=6, column=2, sticky="ew", **pad)
         if not self.service.backend.can_control:
             ttk.Label(main, text="Bu işletim sisteminde yalnızca ekran izlenebilir "
                                  "(fare/klavye kontrolü Windows'ta çalışır).",
@@ -79,6 +82,7 @@ class HostApp:
             self.status.config(text=("● " if ok else "○ ") + STATUS_TEXT[s.status],
                                bg="#e8f5e9" if ok else "#fff3e0", fg="#1b5e20" if ok else "#e65100")
             self.kick_btn.state(["disabled"])
+        self.relay_var.set(f"Sunucu: {self.config.relay}")
         has_perm = self.config.permanent_key is not None
         self.perm_var.set("Gözetimsiz erişim: " + ("AÇIK (kalıcı parola var)" if has_perm else "kapalı"))
         self.perm_btn.config(text="Kaldır" if has_perm else "Kalıcı parola ayarla…")
@@ -86,6 +90,19 @@ class HostApp:
 
     def _kick(self):
         asyncio.run_coroutine_threadsafe(self.service.disconnect_all(), self.loop)
+
+    def _change_relay(self):
+        url = simpledialog.askstring(
+            "Sunucu adresi", "Aktarma sunucusunun adresi\n(ör. wss://ornek.onrender.com):",
+            initialvalue=self.config.relay, parent=self.root)
+        if not url:
+            return
+        url = url.strip()
+        if "://" not in url:
+            url = "wss://" + url
+        if not url.startswith(("ws://", "wss://")):
+            return messagebox.showerror("PyRemote", "Adres ws:// ya da wss:// ile başlamalı.")
+        asyncio.run_coroutine_threadsafe(self.service.set_relay(url), self.loop)
 
     def _toggle_permanent(self):
         if self.config.permanent_key is not None:

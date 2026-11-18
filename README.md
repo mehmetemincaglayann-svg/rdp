@@ -45,26 +45,39 @@ Ana makine penceresindeki ID ve parolayı izleyiciye girin.
 
 ## İnternet üzerinden kullanım
 
-1. Aktarma sunucusunu genel IP'si olan bir makinede çalıştırın ve 8765 numaralı
-   bağlantı noktasını açın:
+Farklı ağlardaki iki bilgisayarın birbirini bulabilmesi için aktarma sunucusunun
+internette herkese açık bir adreste çalışması gerekir.
 
-   ```bash
-   python -m pyremote.relay --host 0.0.0.0 --port 8765
-   ```
+### Seçenek 1: Bulut hizmetine kurma (Docker)
 
-2. Ana makinede ve izleyicide sunucu adresini bir kez verin (ayar dosyasına kaydedilir):
+Depodaki `Dockerfile` yalnızca aktarma sunucusunu çalıştırır ve bağlantı noktasını
+`PORT` ortam değişkeninden alır; Docker imajı çalıştırabilen ve WebSocket destekleyen
+her hizmette (Render, Fly.io, Koyeb, Railway...) kullanılabilir. Render için
+`render.yaml` hazırdır: Render'da "New → Blueprint" ile bu depoyu seçmek yeterlidir.
+Hizmet size `https://ad.onrender.com` gibi bir adres verir; programda bunu
+`wss://ad.onrender.com` olarak girin.
 
-   ```bash
-   python -m pyremote.host --relay ws://SUNUCU_ADRESI:8765
-   ```
+Ücretsiz planlar genellikle kullanılmadığında hizmeti uyutur; ilk bağlantı bu yüzden
+gecikebilir. ID kayıtları kalıcı diske yazılmadığı için hizmet yeniden başlayınca
+sıfırlanır; bu, kullanımı etkilemez.
 
-   ```bash
-   python -m pyremote.viewer --relay ws://SUNUCU_ADRESI:8765
-   ```
+### Seçenek 2: Kendi sunucunuz (VPS)
 
+```bash
+python -m pyremote.relay --host 0.0.0.0 --port 8765
+```
+
+8765 numaralı bağlantı noktasını açın ve adres olarak `ws://SUNUCU_IP:8765` kullanın.
 TLS için `--cert` ve `--key` verip `wss://` kullanabilir ya da sunucuyu Caddy/nginx
-arkasına alabilirsiniz. Oturum içeriği zaten uçtan uca şifrelidir; TLS ek olarak
-ID'leri ve bağlantı meta verisini gizler.
+arkasına alabilirsiniz.
+
+### Adresi programa girme
+
+- Ana makine: penceredeki **Sunucu adresi…** düğmesi (ya da `--relay ADRES`).
+- İzleyici: bağlantı ekranındaki **Sunucu** alanı.
+
+Adres kaydedilir; iki tarafta da aynı adres girilmelidir. Oturum içeriği uçtan uca
+şifrelidir, sunucuyu işleten taraf ekranı ya da parolayı göremez.
 
 ## Gözetimsiz erişim
 

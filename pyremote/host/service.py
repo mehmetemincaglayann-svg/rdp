@@ -297,6 +297,7 @@ class HostService:
         # Ekran yakalama tek bir iş parçacığında yapılır (mss iş parçacığına bağlıdır).
         self._capture = ThreadPoolExecutor(max_workers=1, thread_name_prefix="capture")
         self._control_ws = None
+        self._retry = asyncio.Event()
         self._tasks = set()
 
     def in_capture_thread(self, fn, *args):
@@ -322,13 +323,22 @@ class HostService:
             self.status = status
             self.on_change()
 
+    async def set_relay(self, url: str):
+        """Sunucu adresini değiştirir ve yeni adrese yeniden bağlanır."""
+        self.config.relay = url
+        self._retry.set()
+        if self._control_ws is not None:
+            await self._control_ws.close()
+
     async def disconnect_all(self):
         for s in list(self.sessions):
             await s.chan.close()
 
     async def run(self):
         delay = 1
+        self._retry = asyncio.Event()   # bekleme sırasında hemen yeniden denemek için
         while True:
+            self._retry.clear()
             try:
                 async with connect(self.config.relay, max_size=MAX_WS_MESSAGE) as ws:
                     await ws.send(json.dumps({"role": "host", "id": self.config.host_id,
@@ -356,9 +366,13 @@ class HostService:
                 raise
             except Exception as e:
                 log.info("sunucu bağlantısı yok (%s); %d sn sonra yeniden denenecek", e, delay)
+            self._control_ws = None
             self._set_status("offline")
-            await asyncio.sleep(delay)
-            delay = min(delay * 2, 30)
+            try:
+                await asyncio.wait_for(self._retry.wait(), delay)
+                delay = 1
+            except asyncio.TimeoutError:
+                delay = min(delay * 2, 30)
 
     async def _accept(self, sid: str, peer: str):
         session = None
