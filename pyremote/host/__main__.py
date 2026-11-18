@@ -4,7 +4,7 @@ import asyncio
 import getpass
 import logging
 
-from .. import fix_console
+from .. import fix_console, selftest
 from .. import crypto
 from ..config import Config, format_id
 from .backend import default_backend
@@ -13,18 +13,18 @@ from .service import HostService
 
 def main():
     ap = argparse.ArgumentParser(description="PyRemote ana makine")
-    ap.add_argument("--relay", help="aktarma sunucusu adresi (ör. wss://ornek.com); kaydedilir")
     ap.add_argument("--console", action="store_true", help="pencere açmadan konsolda çalış")
     ap.add_argument("--set-password", action="store_true",
                     help="gözetimsiz erişim için kalıcı parola ayarla ve çık")
     ap.add_argument("--clear-password", action="store_true", help="kalıcı parolayı kaldır ve çık")
+    ap.add_argument("--selftest", metavar="DOSYA", help=argparse.SUPPRESS)
     args = ap.parse_args()
+    if args.selftest:
+        raise SystemExit(selftest(args.selftest))
     fix_console()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     config = Config()
-    if args.relay:
-        config.relay = args.relay
     if args.clear_password:
         config.permanent_key = None
         return print("Kalıcı parola kaldırıldı.")

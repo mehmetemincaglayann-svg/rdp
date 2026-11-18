@@ -16,6 +16,5 @@ FRAME_HDR = struct.Struct(">IHHHHHH")
 CHUNK_HDR = struct.Struct(">I")
 
 CHUNK_SIZE = 64 * 1024
-MAX_WS_MESSAGE = 16 * 1024 * 1024
 MAX_CLIPBOARD = 1024 * 1024
 DRIVES = "::drives"  # Windows sürücü listesini temsil eden sanal yol

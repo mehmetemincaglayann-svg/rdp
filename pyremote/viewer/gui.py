@@ -41,10 +41,10 @@ def human_size(n: int) -> str:
 class Net:
     """Ağ işlemlerini ayrı bir iş parçacığında yürütür; olayları kuyruğa koyar."""
 
-    def __init__(self, relay, host_id, password, events: queue.Queue):
+    def __init__(self, config, host_id, password, events: queue.Queue):
         self.events = events
         self.loop = asyncio.new_event_loop()
-        self.client = ViewerClient(relay, host_id, password,
+        self.client = ViewerClient(config, host_id, password,
                                    lambda ev, **kw: events.put((ev, kw)))
         threading.Thread(target=self._main, daemon=True).start()
 
@@ -163,10 +163,8 @@ class ViewerApp:
                   ).grid(row=0, column=0, columnspan=2, pady=(0, 14))
         self.id_var = tk.StringVar(master=self.root, value=format_id(self.config.data.get("last_id", "")))
         self.pw_var = tk.StringVar(master=self.root)
-        self.relay_var = tk.StringVar(master=self.root, value=self.config.relay)
         for row, (label, var, show) in enumerate((("Karşı tarafın ID'si", self.id_var, ""),
-                                                  ("Parola", self.pw_var, "•"),
-                                                  ("Sunucu", self.relay_var, "")), start=1):
+                                                  ("Parola", self.pw_var, "•")), start=1):
             ttk.Label(f, text=label).grid(row=row, column=0, sticky="w", padx=6, pady=5)
             e = ttk.Entry(f, textvariable=var, show=show, width=30)
             e.grid(row=row, column=1, padx=6, pady=5)
@@ -180,14 +178,14 @@ class ViewerApp:
 
     def _connect(self):
         host_id = normalize_id(self.id_var.get())
-        relay = self.relay_var.get().strip()
-        if len(host_id) != 9 or not self.pw_var.get() or not relay:
+        if len(host_id) != 9 or not self.pw_var.get():
             return self.connect_msg.config(text="9 haneli ID'yi ve parolayı girin.")
         self.config.data["last_id"] = host_id
-        self.config.relay = relay
+        self.config.save()
         self.connect_btn.state(["disabled"])
-        self.connect_msg.config(text="Bağlanılıyor…", foreground="#444")
-        self.net = Net(relay, host_id, self.pw_var.get(), self.events)
+        self.connect_msg.config(text="Bağlanılıyor… (bu 10-20 saniye sürebilir)",
+                                foreground="#444")
+        self.net = Net(self.config, host_id, self.pw_var.get(), self.events)
 
     # --- oturum ekranı -------------------------------------------------
     def _build_session(self):

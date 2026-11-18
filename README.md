@@ -1,36 +1,32 @@
 # PyRemote
 
 Python ile yazılmış, TeamViewer benzeri uzak masaüstü kontrol programı.
+Bağlantı iki bilgisayar arasında **doğrudan (P2P)** kurulur; kendi sunucunuzu
+kurmanız gerekmez.
 
 - Ekran görüntüleme, fare ve klavye kontrolü
-- ID + parola ile internet üzerinden bağlantı (aktarma sunucusu aracılığıyla)
+- ID + parola ile internet üzerinden doğrudan bağlantı (WebRTC veri kanalı)
 - Dosya gönderme / alma, pano (kopyala-yapıştır) paylaşımı
 - Çoklu monitör, görüntü kalitesi seçimi
 - Gözetimsiz erişim (kalıcı parola)
 - Uçtan uca şifreleme (SPAKE2 + ChaCha20-Poly1305)
 
-## Parçalar
+## Kullanım
 
-| Parça | Nerede çalışır | Komut |
-|---|---|---|
-| Aktarma sunucusu | Herkesin erişebildiği bir sunucu (VPS) | `python -m pyremote.relay` |
-| Ana makine | Kontrol edilecek Windows bilgisayar | `python -m pyremote.host` |
-| İzleyici | Kontrol eden bilgisayar | `python -m pyremote.viewer` |
+| Program | Nerede çalışır |
+|---|---|
+| `PyRemoteHost.exe` | Kontrol edilecek Windows bilgisayar |
+| `PyRemoteViewer.exe` | Kontrol eden bilgisayar |
 
-## Kurulum
+1. Kontrol edilecek bilgisayarda `PyRemoteHost.exe` dosyasını açın. Pencerede
+   "Bağlantıya hazır" yazınca ID ve parola kullanılabilir.
+2. Diğer bilgisayarda `PyRemoteViewer.exe` dosyasını açıp ID ve parolayı girin.
+   Bağlantının kurulması 10-20 saniye sürebilir.
 
-Python 3.10 veya üstü gerekir.
+Kaynak koddan çalıştırmak için (Python 3.10+):
 
 ```bash
 pip install -r requirements.txt
-```
-
-## Aynı bilgisayarda hızlı deneme
-
-Üç ayrı terminalde:
-
-```bash
-python -m pyremote.relay --host 127.0.0.1
 ```
 
 ```bash
@@ -41,77 +37,68 @@ python -m pyremote.host
 python -m pyremote.viewer
 ```
 
-Ana makine penceresindeki ID ve parolayı izleyiciye girin.
+## Bağlantı nasıl kuruluyor?
 
-## İnternet üzerinden kullanım
+Farklı ağlardaki iki bilgisayar modemlerin (NAT) arkasında olduğundan birbirinin
+adresini kendi başına bulamaz. PyRemote bunun için herkese açık, ücretsiz iki tür
+servis kullanır; hiçbirini sizin kurmanız gerekmez:
 
-Farklı ağlardaki iki bilgisayarın birbirini bulabilmesi için aktarma sunucusunun
-internette herkese açık bir adreste çalışması gerekir.
+- **STUN** (Google, Cloudflare): her bilgisayar kendi genel adresini öğrenir.
+- **Açık MQTT sunucuları** (HiveMQ, EMQX, Mosquitto): iki taraf birkaç KB'lık
+  bağlantı bilgisini değiş tokuş eder ("tanışma"). Üçü aynı anda kullanılır; biri
+  çalışmasa da diğerleri taşır.
 
-### Seçenek 1: Bulut hizmetine kurma (Docker)
+Tanışmadan sonra ekran görüntüsü, girdi ve dosyalar bu servislere uğramadan iki
+bilgisayar arasında doğrudan akar.
 
-Depodaki `Dockerfile` yalnızca aktarma sunucusunu çalıştırır ve bağlantı noktasını
-`PORT` ortam değişkeninden alır; Docker imajı çalıştırabilen ve WebSocket destekleyen
-her hizmette (Render, Fly.io, Koyeb, Railway...) kullanılabilir. Render için
-`render.yaml` hazırdır: Render'da "New → Blueprint" ile bu depoyu seçmek yeterlidir.
-Hizmet size `https://ad.onrender.com` gibi bir adres verir; programda bunu
-`wss://ad.onrender.com` olarak girin.
+### Doğrudan bağlantı her ağda kurulamaz
 
-Ücretsiz planlar genellikle kullanılmadığında hizmeti uyutur; ilk bağlantı bu yüzden
-gecikebilir. ID kayıtları kalıcı diske yazılmadığı için hizmet yeniden başlayınca
-sıfırlanır; bu, kullanımı etkilemez.
+İki taraftan birinin ağı "simetrik NAT" kullanıyorsa (mobil internet, CGNAT kullanan
+bazı sağlayıcılar, sıkı kurumsal ağlar) doğrudan bağlantı kurulamaz ve izleyici bunu
+bildirir. Bu durumda seçenekler: taraflardan birinin başka bir ağa geçmesi ya da
+ayar dosyasına bir TURN (aktarma) sunucusu eklenmesi.
 
-### Seçenek 2: Kendi sunucunuz (VPS)
+Servis listeleri ayar dosyasından değiştirilebilir
+(`%APPDATA%\PyRemote\config.json`, iki tarafta da aynı olmalı):
 
-```bash
-python -m pyremote.relay --host 0.0.0.0 --port 8765
+```json
+{
+  "brokers": ["wss://broker.hivemq.com:8884/mqtt"],
+  "ice_servers": [
+    {"urls": ["stun:stun.l.google.com:19302"]},
+    {"urls": "turn:turn.ornek.com:3478", "username": "kullanici", "credential": "parola"}
+  ]
+}
 ```
-
-8765 numaralı bağlantı noktasını açın ve adres olarak `ws://SUNUCU_IP:8765` kullanın.
-TLS için `--cert` ve `--key` verip `wss://` kullanabilir ya da sunucuyu Caddy/nginx
-arkasına alabilirsiniz.
-
-### Adresi programa girme
-
-- Ana makine: penceredeki **Sunucu adresi…** düğmesi (ya da `--relay ADRES`).
-- İzleyici: bağlantı ekranındaki **Sunucu** alanı.
-
-Adres kaydedilir; iki tarafta da aynı adres girilmelidir. Oturum içeriği uçtan uca
-şifrelidir, sunucuyu işleten taraf ekranı ya da parolayı göremez.
 
 ## Gözetimsiz erişim
 
 Ana makine penceresinde **Kalıcı parola ayarla…** düğmesini kullanın ya da:
 
 ```bash
-python -m pyremote.host --set-password
+PyRemoteHost.exe --set-password
 ```
 
-Ana makinenin oturum açılınca kendiliğinden başlaması için Görev Zamanlayıcı'da
-"oturum açıldığında" tetiklenen bir görev oluşturun; komut olarak
-`pythonw -m pyremote.host` verin. Kalıcı parolayı kaldırmak için pencere
-düğmesini ya da `--clear-password` seçeneğini kullanın.
+Ana makinenin oturum açılınca kendiliğinden başlaması için `PyRemoteHost.exe`
+dosyasının kısayolunu Başlangıç klasörüne koyun (Win+R → `shell:startup`).
 
-## Tek dosyalık .exe üretme
+## .exe üretme
 
-PyInstaller yalnızca çalıştığı işletim sistemi için derler; bu yüzden derleme
-Windows'ta yapılmalıdır. Windows'ta `build.bat` dosyasına çift tıklayın. Bittiğinde
-`dist` klasöründe üç dosya oluşur:
-
-- `PyRemoteHost.exe` – kontrol edilecek bilgisayarda çalışır
-- `PyRemoteViewer.exe` – kontrol eden bilgisayarda çalışır
-- `PyRemoteRelay.exe` – aktarma sunucusu (Windows sunucuda barındıracaksanız)
-
-Proje GitHub'daysa `.github/workflows/build.yml` aynı dosyaları bulutta üretir:
-Actions sekmesinden "Windows exe" iş akışını çalıştırıp çıktıyı indirin.
+PyInstaller yalnızca çalıştığı işletim sistemi için derler; derleme Windows'ta
+yapılmalıdır. Windows'ta `build.bat` dosyasına çift tıklayın; dosyalar `dist`
+klasöründe oluşur. GitHub'da ise Actions sekmesindeki "Windows exe" iş akışı aynı
+dosyaları üretir.
 
 İmzasız `.exe` dosyaları için Windows SmartScreen ve bazı antivirüsler uyarı verebilir.
 
 ## Güvenlik modeli
 
 - Parola ağ üzerinden hiç gönderilmez. İki taraf SPAKE2 ile parolayı bildiklerini
-  kanıtlar ve bir oturum anahtarı üretir; aktarma sunucusu ne parolayı ne de
-  içeriği görebilir, parolayı çevrimdışı deneme-yanılma ile de kıramaz.
+  kanıtlar ve bir oturum anahtarı üretir. Tanışma sunucuları ne parolayı ne de
+  içeriği görebilir; araya giren biri parolayı çevrimdışı deneme-yanılma ile de kıramaz.
+- Tanışma iletileri ID'den türetilen bir anahtarla şifrelenir. ID'nizi bilen biri bu
+  iletilerdeki IP adreslerinizi görebilir (ID gizli bir bilgi değildir); oturuma
+  ise parola olmadan giremez.
 - Art arda 5 hatalı denemeden sonra ana makine girişleri 5 dakika (her yeni
   hatada katlanarak, en çok 1 saat) kilitler.
 - Kalıcı parola diskte düz metin olarak saklanmaz (scrypt ile türetilmiş anahtar saklanır).
@@ -125,7 +112,8 @@ Actions sekmesinden "Windows exe" iş akışını çalıştırıp çıktıyı in
 - Fare/klavye kontrolü yalnızca Windows ana makinede çalışır (diğer sistemlerde yalnızca izleme).
 - UAC onay pencereleri, kilit ekranı ve yönetici olarak çalışan programlar, ana makine
   normal kullanıcı olarak çalışırken kontrol edilemez (Windows kısıtı). Ctrl+Alt+Del gönderilemez.
-- Trafiğin tamamı aktarma sunucusundan geçer (doğrudan P2P bağlantı yok).
+- Ücretsiz açık servislerin çalışma garantisi yoktur; hepsi birden erişilemez olursa
+  yeni bağlantı kurulamaz (açık oturumlar etkilenmez).
 - Görüntü JPEG olarak ve yalnızca değişen bölge gönderilerek aktarılır; video ve oyun için uygun değildir.
 - Ses aktarımı yoktur. Pano yalnızca metin taşır.
 
@@ -135,14 +123,22 @@ Actions sekmesinden "Windows exe" iş akışını çalıştırıp çıktıyı in
 python tests/test_e2e.py
 ```
 
+İnternet ve gerçek servislerle deneme:
+
+```bash
+python tests/test_public.py
+```
+
 ## Dizin yapısı
 
 ```
 pyremote/
-  relay.py          aktarma sunucusu
+  p2p.py            WebRTC ile doğrudan bağlantı kurma
+  signaling.py      açık MQTT sunucuları üzerinden tanışma
+  transport.py      veri kanalı uyarlayıcısı (parçalama, akış denetimi)
   crypto.py         SPAKE2 el sıkışması, şifreli kanal, deneme kilidi
   protocol.py       ileti türleri
-  config.py         ayar dosyası (ID, sunucu adresi, kalıcı parola anahtarı)
+  config.py         ayar dosyası (ID, servis listeleri, kalıcı parola anahtarı)
   host/service.py   oturum yönetimi: ekran, girdi, pano, dosya
   host/backend.py   ekran yakalama (mss) ve Windows girdisi
   host/win_input.py SendInput ile fare/klavye

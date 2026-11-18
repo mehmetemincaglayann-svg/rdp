@@ -6,17 +6,17 @@ import os
 from pathlib import Path
 
 from PIL import Image
-from websockets.asyncio.client import connect
-from websockets.exceptions import ConnectionClosed
 
-from .. import crypto
-from ..protocol import (CHUNK_HDR, CHUNK_SIZE, FRAME_HDR, MAX_WS_MESSAGE, MSG_CHUNK,
-                        MSG_FRAME, MSG_JSON)
+from .. import crypto, p2p
+from ..protocol import CHUNK_HDR, CHUNK_SIZE, FRAME_HDR, MSG_CHUNK, MSG_FRAME, MSG_JSON
+from ..transport import Closed
 
 ERRORS = {
-    "offline": "Bu ID ile çevrimiçi bir bilgisayar yok.",
-    "busy": "Karşı bilgisayarda çok fazla açık oturum var.",
-    "rate_limited": "Çok fazla bağlantı denemesi yapıldı. Biraz sonra tekrar deneyin.",
+    "no_signal": "Tanışma sunucularına ulaşılamadı. İnternet bağlantınızı kontrol edin.",
+    "offline": "Bu ID ile çevrimiçi bir bilgisayar bulunamadı.",
+    "p2p_failed": "Karşı bilgisayar bulundu ancak doğrudan bağlantı kurulamadı. "
+                  "İki taraftan birinin ağı (ör. mobil internet / CGNAT) doğrudan "
+                  "bağlantıya izin vermiyor olabilir.",
     "wrong_password": "Parola hatalı.",
     "locked": "Çok fazla hatalı deneme yapıldı; karşı bilgisayar girişleri geçici olarak kilitledi.",
 }
@@ -32,8 +32,8 @@ class ViewerClient:
     Olaylar: info, frame, clip, ls_result, progress, file_done, file_error
     """
 
-    def __init__(self, relay: str, host_id: str, password: str, on_event):
-        self.relay = relay
+    def __init__(self, config, host_id: str, password: str, on_event):
+        self.config = config
         self.host_id = host_id
         self.password = password
         self.on_event = on_event
@@ -44,24 +44,20 @@ class ViewerClient:
 
     async def connect(self):
         try:
-            ws = await connect(self.relay, max_size=MAX_WS_MESSAGE)
-        except Exception as e:
-            raise ConnectError(f"Sunucuya bağlanılamadı: {e}") from e
+            transport = await p2p.viewer_connect(self.host_id, self.config.brokers,
+                                                 self.config.ice_servers)
+        except p2p.P2PError as e:
+            raise ConnectError(ERRORS.get(str(e), str(e))) from e
         try:
-            await ws.send(json.dumps({"role": "viewer", "id": self.host_id}))
-            reply = json.loads(await asyncio.wait_for(ws.recv(), 25))
-            if reply.get("type") != "ready":
-                code = reply.get("error", "?")
-                raise ConnectError(ERRORS.get(code, f"Bağlantı reddedildi ({code})"))
-            self.chan = await crypto.viewer_handshake(ws, self.password, self.host_id)
+            self.chan = await crypto.viewer_handshake(transport, self.password, self.host_id)
         except crypto.AuthError as e:
-            await ws.close()
+            await transport.close()
             raise ConnectError(ERRORS.get(str(e), f"Kimlik doğrulama başarısız: {e}")) from e
-        except (ConnectionClosed, asyncio.TimeoutError, ValueError) as e:
-            await ws.close()
+        except (Closed, asyncio.TimeoutError, ValueError) as e:
+            await transport.close()
             raise ConnectError("Bağlantı kurulurken kesildi.") from e
         except BaseException:
-            await ws.close()
+            await transport.close()
             raise
 
     async def run(self):
@@ -84,7 +80,7 @@ class ViewerClient:
                                       filename=d["path"].name)
                 elif mtype == MSG_JSON:
                     self._on_json(json.loads(payload))
-        except (ConnectionClosed, crypto.AuthError):
+        except (Closed, crypto.AuthError):
             pass
         finally:
             for d in self._downloads.values():
@@ -129,7 +125,7 @@ class ViewerClient:
     async def send(self, obj: dict):
         try:
             await self.chan.send_json(obj)
-        except ConnectionClosed:
+        except Closed:
             pass
 
     async def close(self):
@@ -168,7 +164,7 @@ class ViewerClient:
                 await self.chan.send_json({"t": "put_end", "id": tid})
             remote = await asyncio.wait_for(fut, 60)
             self.on_event("file_done", id=tid, path=remote, direction="up")
-        except (OSError, asyncio.TimeoutError, ConnectionClosed) as e:
+        except (OSError, asyncio.TimeoutError, Closed) as e:
             self._uploads.pop(tid, None)
             self.on_event("file_error", id=tid, error=str(e) or "zaman aşımı")
         return tid

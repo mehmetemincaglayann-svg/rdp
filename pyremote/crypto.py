@@ -1,7 +1,7 @@
 """Uçtan uca şifreleme.
 
 Kimlik doğrulama SPAKE2 (parola doğrulamalı anahtar değişimi) ile yapılır:
-aktarma sunucusu ne parolayı ne de oturum anahtarını öğrenebilir, araya
+tanışma sunucuları ne parolayı ne de oturum anahtarını öğrenebilir, araya
 giren biri de parolayı çevrimdışı deneme-yanılma ile kıramaz. Oturum
 trafiği ChaCha20-Poly1305 ile şifrelenir.
 
@@ -140,7 +140,7 @@ class AuthGuard:
 
 
 class SecureChannel:
-    """Sıralı, kimliği doğrulanmış şifreli ileti kanalı (websocket üzerinde)."""
+    """Sıralı, kimliği doğrulanmış şifreli ileti kanalı (veri kanalı üzerinde)."""
 
     def __init__(self, ws, key: bytes, is_host: bool, slot: str = "session"):
         self.ws = ws

@@ -8,7 +8,6 @@ python -m pip install --upgrade pip || goto :hata
 pip install -r requirements.txt pyinstaller || goto :hata
 pyinstaller --noconfirm --clean --onefile --noconsole --name PyRemoteHost run_host.py || goto :hata
 pyinstaller --noconfirm --clean --onefile --noconsole --name PyRemoteViewer run_viewer.py || goto :hata
-pyinstaller --noconfirm --clean --onefile --console --name PyRemoteRelay run_relay.py || goto :hata
 echo.
 echo Tamamlandi. Dosyalar "dist" klasorunde:
 dir /b dist\*.exe

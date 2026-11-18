@@ -1,4 +1,6 @@
-"""Uçtan uca test: aktarma sunucusu + ana makine (sahte arka uç) + izleyici istemcisi.
+"""Uçtan uca test: ana makine (sahte ekran/girdi) + izleyici, gerçek P2P veri kanalı üzerinden.
+
+Tanışma için yerel bir sahte MQTT sunucusu kullanılır; internet gerekmez.
 
 Çalıştırma:  python tests/test_e2e.py
 """
@@ -9,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from PIL import Image, ImageDraw
 
@@ -16,8 +19,8 @@ from pyremote import fix_console
 from pyremote.config import Config
 from pyremote.host.backend import Backend
 from pyremote.host.service import HostService
-from pyremote.relay import run_relay
 from pyremote.viewer.client import ConnectError, ViewerClient
+from minibroker import MiniBroker
 
 PORT = 18765
 
@@ -77,31 +80,35 @@ class Collector:
 
 async def main():
     tmp = Path(tempfile.mkdtemp()).resolve()
-    relay_url = f"ws://127.0.0.1:{PORT}"
-    ready = asyncio.Event()
-    relay_task = asyncio.create_task(run_relay("127.0.0.1", PORT, tmp / "reg.json", ready=ready))
-    await ready.wait()
+    broker = await MiniBroker().serve(PORT)
 
     cfg = Config(tmp / "config.json")
-    cfg.relay = relay_url
+    # Ölü bir sunucu da listede: biri çalışmasa bile bağlantı kurulabilmeli.
+    cfg.data["brokers"] = ["ws://127.0.0.1:1", f"ws://127.0.0.1:{PORT}"]
+    cfg.data["ice_servers"] = []      # test yerel ağda çalışır, STUN gerekmez
+    cfg.save()
     backend = FakeBackend()
     host = HostService(cfg, backend)
     host.download_dir = tmp / "indirilenler"
     host_task = asyncio.create_task(host.run())
     while host.status != "online":
         await asyncio.sleep(0.05)
-    print("ok  ana makine kaydoldu, ID:", cfg.host_id)
+    print("ok  ana makine tanışma sunucusuna bağlandı, ID:", cfg.host_id)
 
-    # 1) bilinmeyen ID
+    # 1) bilinmeyen ID (yanıt veren olmaz)
+    from pyremote import p2p
+    p2p.ANSWER_TIMEOUT = 3
     try:
-        await ViewerClient(relay_url, "111111111", "x", lambda *a, **k: None).connect()
+        await ViewerClient(cfg, "111111111", "x", lambda *a, **k: None).connect()
         raise AssertionError("bilinmeyen ID kabul edildi")
     except ConnectError as e:
-        print("ok  bilinmeyen ID reddedildi:", e)
+        assert "bulunamadı" in str(e), e
+        print("ok  bilinmeyen ID:", e)
+    p2p.ANSWER_TIMEOUT = 20
 
     # 2) yanlış parola
     try:
-        await ViewerClient(relay_url, cfg.host_id, "yanlis-parola", lambda *a, **k: None).connect()
+        await ViewerClient(cfg, cfg.host_id, "yanlis-parola", lambda *a, **k: None).connect()
         raise AssertionError("yanlış parola kabul edildi")
     except ConnectError as e:
         assert "Parola" in str(e), e
@@ -110,13 +117,15 @@ async def main():
 
     # 3) oturum parolası ile bağlan
     col = Collector()
-    client = ViewerClient(relay_url, cfg.host_id, host.session_password, col)
+    client = ViewerClient(cfg, cfg.host_id, host.session_password, col)
     await client.connect()
     assert client.chan.slot == "session"
     run_task = asyncio.create_task(client.run())
     info = await col.wait(lambda n, k: n == "info")
     assert len(info["monitors"]) == 2 and info["control"] and not info["unattended"]
-    print("ok  oturum parolasıyla bağlandı; monitör sayısı:", len(info["monitors"]))
+    peer = next(iter(host.sessions.values()))
+    assert peer != "?", "karşı tarafın adresi bulunamadı"
+    print("ok  oturum parolasıyla P2P bağlandı; monitör:", len(info["monitors"]), "karşı adres:", peer)
 
     # 4) kareler: önce tam kare, sonra yalnızca değişen bölge
     first = await col.wait(lambda n, k: n == "frame")
@@ -171,7 +180,7 @@ async def main():
 
     # 8) dosya gönderme (izleyici -> ana makine), aynı adla ikinci kez
     src = tmp / "gönder.bin"
-    data = os.urandom(300_000)
+    data = os.urandom(3_000_000)
     src.write_bytes(data)
     await client.upload(str(src))
     done = await col.wait(lambda n, k: n == "file_done" and k["direction"] == "up")
@@ -215,13 +224,13 @@ async def main():
         pass
     host.set_permanent_password("çok-gizli-kalıcı-parola")
     assert "çok-gizli" not in (tmp / "config.json").read_text("utf-8")
-    c2 = ViewerClient(relay_url, cfg.host_id, "çok-gizli-kalıcı-parola", Collector())
+    c2 = ViewerClient(cfg, cfg.host_id, "çok-gizli-kalıcı-parola", Collector())
     await c2.connect()
     assert c2.chan.slot == "permanent"
     await c2.close()
     host.set_permanent_password(None)
     try:
-        await ViewerClient(relay_url, cfg.host_id, "çok-gizli-kalıcı-parola", Collector()).connect()
+        await ViewerClient(cfg, cfg.host_id, "çok-gizli-kalıcı-parola", Collector()).connect()
         raise AssertionError("kaldırılan kalıcı parola kabul edildi")
     except ConnectError:
         pass
@@ -231,26 +240,35 @@ async def main():
     host.guard.success()
     for _ in range(5):
         try:
-            await ViewerClient(relay_url, cfg.host_id, "hatali", Collector()).connect()
+            await ViewerClient(cfg, cfg.host_id, "hatali", Collector()).connect()
         except ConnectError:
             pass
     try:
-        await ViewerClient(relay_url, cfg.host_id, host.session_password, Collector()).connect()
+        await ViewerClient(cfg, cfg.host_id, host.session_password, Collector()).connect()
         raise AssertionError("kilitliyken giriş kabul edildi")
     except ConnectError as e:
         assert "kilitledi" in str(e), e
     print("ok  5 hatalı denemeden sonra girişler kilitlendi")
 
-    # 13) aktarma sunucusu ID sahipliğini korur
-    import json
-    from websockets.asyncio.client import connect
-    async with connect(relay_url) as ws:
-        await ws.send(json.dumps({"role": "host", "id": cfg.host_id, "secret": "f" * 64}))
-        assert json.loads(await ws.recv())["error"] == "id_taken"
-    print("ok  başkası aynı ID'yi sahiplenemiyor")
+    # 13) büyük kare: veri kanalı parçalama + akış denetimi
+    from pyremote.transport import DataChannelTransport
+    host.guard.success()
+    c3 = ViewerClient(cfg, cfg.host_id, host.session_password, Collector())
+    await c3.connect()
+    big = os.urandom(2_500_000)
+    session = next(iter(host.sessions))
+    await session.chan.send(9, big)
+    while True:
+        mtype, payload = await asyncio.wait_for(c3.chan.recv(), 20)
+        if mtype == 9:
+            break
+    assert payload == big
+    await c3.close()
+    print("ok  2,5 MB'lık tek ileti parçalanıp eksiksiz ulaştı")
 
     host_task.cancel()
-    relay_task.cancel()
+    await asyncio.gather(host_task, return_exceptions=True)
+    broker.close()
     print("\nTÜM TESTLER GEÇTİ")
 
 

@@ -5,7 +5,19 @@ import secrets
 import sys
 from pathlib import Path
 
-DEFAULT_RELAY = os.environ.get("PYREMOTE_RELAY", "ws://127.0.0.1:8765")
+# Tanışma için kullanılan herkese açık ücretsiz MQTT sunucuları (WebSocket üzerinden).
+DEFAULT_BROKERS = [
+    "wss://broker.hivemq.com:8884/mqtt",
+    "wss://broker.emqx.io:8084/mqtt",
+    "wss://test.mosquitto.org:8081/mqtt",
+]
+# Genel IP adresini öğrenmek için STUN sunucuları. İsteğe bağlı olarak buraya
+# {"urls": "turn:...", "username": "...", "credential": "..."} biçiminde bir TURN
+# sunucusu da eklenebilir (doğrudan bağlantının kurulamadığı ağlar için).
+DEFAULT_ICE_SERVERS = [
+    {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]},
+    {"urls": ["stun:stun.cloudflare.com:3478"]},
+]
 
 
 def config_dir() -> Path:
@@ -40,14 +52,8 @@ class Config:
                 self.data = json.loads(self.path.read_text("utf-8"))
             except (OSError, ValueError):
                 self.data = {}
-        changed = False
         if not self.data.get("host_id"):
             self.data["host_id"] = new_host_id()
-            changed = True
-        if not self.data.get("host_secret"):
-            self.data["host_secret"] = secrets.token_hex(32)
-            changed = True
-        if changed:
             self.save()
 
     def save(self):
@@ -56,28 +62,17 @@ class Config:
         os.replace(tmp, self.path)
 
     @property
-    def relay(self) -> str:
-        return self.data.get("relay") or DEFAULT_RELAY
+    def brokers(self) -> list[str]:
+        return self.data.get("brokers") or DEFAULT_BROKERS
 
-    @relay.setter
-    def relay(self, value: str):
-        self.data["relay"] = value
-        self.save()
+    @property
+    def ice_servers(self) -> list[dict]:
+        v = self.data.get("ice_servers")
+        return v if isinstance(v, list) else DEFAULT_ICE_SERVERS
 
     @property
     def host_id(self) -> str:
         return self.data["host_id"]
-
-    @property
-    def host_secret(self) -> str:
-        return self.data["host_secret"]
-
-    def regenerate_id(self):
-        self.data["host_id"] = new_host_id()
-        self.data["host_secret"] = secrets.token_hex(32)
-        # Kalıcı parola anahtarı ID'ye bağlıdır; ID değişince geçersiz olur.
-        self.data.pop("permanent_key", None)
-        self.save()
 
     @property
     def permanent_key(self) -> bytes | None:

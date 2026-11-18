@@ -1,4 +1,4 @@
-"""Ana makine servisi: aktarma sunucusuna kaydolur, gelen oturumları yürütür."""
+"""Ana makine servisi: bağlantı tekliflerini yanıtlar, oturumları yürütür."""
 import asyncio
 import io
 import json
@@ -11,13 +11,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PIL import Image, ImageChops
-from websockets.asyncio.client import connect
-from websockets.exceptions import ConnectionClosed
 
-from .. import crypto
+from .. import crypto, p2p
 from ..config import Config
 from ..protocol import (CHUNK_HDR, CHUNK_SIZE, DRIVES, FRAME_HDR, MAX_CLIPBOARD,
-                        MAX_WS_MESSAGE, MSG_CHUNK, MSG_FRAME, MSG_JSON)
+                        MSG_CHUNK, MSG_FRAME, MSG_JSON)
+from ..signaling import Signaling, topic_base, unseal
+from ..transport import Closed
 from .backend import Backend
 
 log = logging.getLogger("host")
@@ -25,6 +25,8 @@ log = logging.getLogger("host")
 MAX_FPS = 20
 MAX_UNACKED = 2
 MAX_UPLOADS = 4
+MAX_PENDING = 6             # aynı anda kurulmakta/açık olan bağlantı
+MAX_OFFERS_PER_2MIN = 30    # teklif seli koruması
 BAD_NAME_CHARS = set('<>:"/\\|?*')
 
 
@@ -100,7 +102,7 @@ class Session:
         try:
             done, _ = await asyncio.wait(loops, return_when=asyncio.FIRST_COMPLETED)
             for t in done:
-                if t.exception() and not isinstance(t.exception(), ConnectionClosed):
+                if t.exception() and not isinstance(t.exception(), Closed):
                     log.warning("oturum hatası: %r", t.exception())
         finally:
             for t in loops + list(self.tasks):
@@ -296,8 +298,8 @@ class HostService:
         self.download_dir = Path.home() / "Downloads"
         # Ekran yakalama tek bir iş parçacığında yapılır (mss iş parçacığına bağlıdır).
         self._capture = ThreadPoolExecutor(max_workers=1, thread_name_prefix="capture")
-        self._control_ws = None
-        self._retry = asyncio.Event()
+        self._sig = None
+        self._seen = {}                # işlenen teklif no -> zaman
         self._tasks = set()
 
     def in_capture_thread(self, fn, *args):
@@ -323,70 +325,54 @@ class HostService:
             self.status = status
             self.on_change()
 
-    async def set_relay(self, url: str):
-        """Sunucu adresini değiştirir ve yeni adrese yeniden bağlanır."""
-        self.config.relay = url
-        self._retry.set()
-        if self._control_ws is not None:
-            await self._control_ws.close()
-
     async def disconnect_all(self):
         for s in list(self.sessions):
             await s.chan.close()
 
     async def run(self):
-        delay = 1
-        self._retry = asyncio.Event()   # bekleme sırasında hemen yeniden denemek için
-        while True:
-            self._retry.clear()
-            try:
-                async with connect(self.config.relay, max_size=MAX_WS_MESSAGE) as ws:
-                    await ws.send(json.dumps({"role": "host", "id": self.config.host_id,
-                                              "secret": self.config.host_secret}))
-                    reply = json.loads(await asyncio.wait_for(ws.recv(), 15))
-                    if reply.get("error") == "id_taken":
-                        log.warning("ID başkası tarafından kullanılıyor, yenisi üretiliyor")
-                        self.config.regenerate_id()
-                        self.new_session_password()
-                        continue
-                    if reply.get("type") != "registered":
-                        raise ConnectionError(f"kayıt reddedildi: {reply}")
-                    self._control_ws = ws
-                    self._set_status("online")
-                    log.info("sunucuya bağlandı. ID: %s", self.config.host_id)
-                    delay = 1
-                    async for raw in ws:
-                        msg = json.loads(raw)
-                        if msg.get("type") == "connect":
-                            t = asyncio.create_task(self._accept(str(msg["session"]),
-                                                                 str(msg.get("peer", "?"))))
-                            self._tasks.add(t)
-                            t.add_done_callback(self._tasks.discard)
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                log.info("sunucu bağlantısı yok (%s); %d sn sonra yeniden denenecek", e, delay)
-            self._control_ws = None
-            self._set_status("offline")
-            try:
-                await asyncio.wait_for(self._retry.wait(), delay)
-                delay = 1
-            except asyncio.TimeoutError:
-                delay = min(delay * 2, 30)
+        """Tanışma sunucularını dinler; gelen her bağlantı teklifini yanıtlar."""
+        host_id = self.config.host_id
 
-    async def _accept(self, sid: str, peer: str):
+        def on_change():
+            self._set_status("online" if self._sig.connected else "offline")
+
+        def on_message(topic, payload):
+            msg = unseal(host_id, payload)
+            if not msg or not isinstance(msg.get("sid"), str) or not isinstance(msg.get("sdp"), str):
+                return
+            now = asyncio.get_running_loop().time()
+            for k in [k for k, t in self._seen.items() if now - t > 120]:
+                del self._seen[k]
+            # Aynı teklif birden çok sunucudan ve yinelenerek gelir; bir kez işlenir.
+            if msg["sid"] in self._seen or len(self._seen) >= MAX_OFFERS_PER_2MIN \
+                    or len(self._tasks) >= MAX_PENDING:
+                return
+            self._seen[msg["sid"]] = now
+            t = asyncio.create_task(self._accept(msg["sid"], msg["sdp"]))
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
+
+        self._sig = Signaling(self.config.brokers, on_message, on_change)
+        await self._sig.subscribe(topic_base(host_id) + "/offer")
+        self._sig.start()
+        try:
+            await asyncio.Future()
+        finally:
+            await self._sig.stop()
+
+    async def _accept(self, sid: str, offer_sdp: str):
         session = None
         try:
-            ws = await connect(self.config.relay, max_size=MAX_WS_MESSAGE)
+            transport = await p2p.host_answer(self._sig, self.config.host_id, sid, offer_sdp,
+                                              self.config.ice_servers)
+        except (p2p.P2PError, asyncio.TimeoutError):
+            return log.info("bir bağlantı isteği geldi ancak doğrudan bağlantı kurulamadı")
         except Exception as e:
-            return log.warning("veri bağlantısı kurulamadı: %s", e)
+            return log.warning("bağlantı teklifi işlenemedi: %r", e)
+        peer = transport.peer_address()
         try:
-            await ws.send(json.dumps({"role": "host_data", "session": sid,
-                                      "secret": self.config.host_secret}))
-            if json.loads(await asyncio.wait_for(ws.recv(), 20)).get("type") != "ready":
-                return
             passwords = {"session": self._session_key, "permanent": self.config.permanent_key}
-            chan = await crypto.host_handshake(ws, passwords, self.guard)
+            chan = await crypto.host_handshake(transport, passwords, self.guard)
             log.info("oturum açıldı: %s (%s parola)", peer, chan.slot)
             session = Session(self, chan, peer)
             self.sessions[session] = peer
@@ -394,10 +380,10 @@ class HostService:
             await session.run()
         except crypto.AuthError as e:
             log.warning("kimlik doğrulama başarısız (%s): %s", peer, e)
-        except (ConnectionClosed, asyncio.TimeoutError, ValueError):
+        except (Closed, asyncio.TimeoutError, ValueError):
             pass
         finally:
-            await ws.close()
+            await transport.close()
             if session:
                 self.sessions.pop(session, None)
                 log.info("oturum kapandı: %s", peer)
