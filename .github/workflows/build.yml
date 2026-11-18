@@ -1,0 +1,24 @@
+name: Windows exe
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt pyinstaller
+      - run: python tests/test_e2e.py
+      - run: pyinstaller --noconfirm --onefile --noconsole --name PyRemoteHost run_host.py
+      - run: pyinstaller --noconfirm --onefile --noconsole --name PyRemoteViewer run_viewer.py
+      - run: pyinstaller --noconfirm --onefile --console --name PyRemoteRelay run_relay.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pyremote-windows
+          path: dist/*.exe

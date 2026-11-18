@@ -1,0 +1,6 @@
+websockets>=13
+cryptography>=42
+spake2>=0.9
+pillow>=10
+mss>=9
+pyperclip>=1.8
