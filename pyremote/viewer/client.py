@@ -14,12 +14,31 @@ from ..transport import Closed
 ERRORS = {
     "no_signal": "Tanışma sunucularına ulaşılamadı. İnternet bağlantınızı kontrol edin.",
     "offline": "Bu ID ile çevrimiçi bir bilgisayar bulunamadı.",
-    "p2p_failed": "Karşı bilgisayar bulundu ancak doğrudan bağlantı kurulamadı. "
-                  "İki taraftan birinin ağı (ör. mobil internet / CGNAT) doğrudan "
-                  "bağlantıya izin vermiyor olabilir.",
+    "p2p_failed": "Karşı bilgisayar bulundu ancak doğrudan bağlantı kurulamadı.",
     "wrong_password": "Parola hatalı.",
     "locked": "Çok fazla hatalı deneme yapıldı; karşı bilgisayar girişleri geçici olarak kilitledi.",
 }
+
+
+def explain_p2p_failure(viewer_nat: str, host_nat: str) -> str:
+    """Hangi tarafın ağının engel olduğunu ve ne yapılabileceğini söyler."""
+    from ..nat import NAT_TEXT
+    lines = [ERRORS["p2p_failed"],
+             f"• Bu bilgisayarın ağı: {NAT_TEXT.get(viewer_nat, viewer_nat)}",
+             f"• Karşı bilgisayarın ağı: {NAT_TEXT.get(host_nat, host_nat)}"]
+    bad_here, bad_there = viewer_nat in ("symmetric", "blocked"), host_nat in ("symmetric", "blocked")
+    if bad_here and bad_there:
+        lines.append("İki ağ da doğrudan bağlantıya uygun değil. Taraflardan en az biri "
+                     "başka bir ağa (ör. ev interneti) geçmeli.")
+    elif bad_here:
+        lines.append("Engel bu bilgisayarın ağında. Başka bir ağa geçmeyi deneyin "
+                     "(mobil internet ve bazı kurum ağları buna izin vermez).")
+    elif bad_there:
+        lines.append("Engel karşı bilgisayarın ağında. O bilgisayar başka bir ağa geçmeli.")
+    else:
+        lines.append("Ağlar uygun görünüyor; güvenlik duvarı ya da antivirüs programı "
+                     "engelliyor olabilir. İki tarafta da PyRemote'a izin verip yeniden deneyin.")
+    return "\n".join(lines)
 
 
 class ConnectError(Exception):
@@ -47,6 +66,8 @@ class ViewerClient:
             transport = await p2p.viewer_connect(self.host_id, self.config.brokers,
                                                  self.config.ice_servers)
         except p2p.P2PError as e:
+            if str(e) == "p2p_failed":
+                raise ConnectError(explain_p2p_failure(e.viewer_nat, e.host_nat)) from e
             raise ConnectError(ERRORS.get(str(e), str(e))) from e
         try:
             self.chan = await crypto.viewer_handshake(transport, self.password, self.host_id)

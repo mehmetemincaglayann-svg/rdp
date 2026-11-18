@@ -46,6 +46,10 @@ def main():
         except KeyboardInterrupt:
             pass
     else:
+        from ..config import config_dir
+        handler = logging.FileHandler(config_dir() / "host.log", mode="w", encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(message)s"))
+        logging.getLogger().addHandler(handler)
         from .gui import HostApp
         HostApp(config, backend).run()
 

@@ -173,7 +173,7 @@ class ViewerApp:
                 e.focus_set()
         self.connect_btn = ttk.Button(f, text="Bağlan", command=self._connect)
         self.connect_btn.grid(row=4, column=0, columnspan=2, pady=(14, 4), sticky="ew")
-        self.connect_msg = ttk.Label(f, foreground="#a00", wraplength=340)
+        self.connect_msg = ttk.Label(f, foreground="#a00", wraplength=340, justify="left")
         self.connect_msg.grid(row=5, column=0, columnspan=2)
 
     def _connect(self):

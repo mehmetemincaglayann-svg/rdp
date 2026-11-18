@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from pyremote import fix_console, p2p
+from pyremote import fix_console, nat, p2p
 from pyremote.config import DEFAULT_BROKERS, DEFAULT_ICE_SERVERS, Config
 from pyremote.host.service import HostService
 from pyremote.signaling import Signaling
@@ -55,6 +55,9 @@ async def main() -> int:
     stun_ok = "typ srflx" in pc.localDescription.sdp
     await pc.close()
     print("ok  " if stun_ok else "HATA", "STUN ile genel adres öğrenme")
+
+    nat_type = await nat.detect()
+    print("ok  " if nat_type in ("ok", "symmetric") else "HATA", "ağ türü denetimi:", nat_type)
 
     cfg = Config(Path(tempfile.mkdtemp()) / "config.json")   # varsayılan servisler
     host = HostService(cfg, FakeBackend())

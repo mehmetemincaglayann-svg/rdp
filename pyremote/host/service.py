@@ -12,7 +12,7 @@ from pathlib import Path
 
 from PIL import Image, ImageChops
 
-from .. import crypto, p2p
+from .. import crypto, nat, p2p
 from ..config import Config
 from ..protocol import (CHUNK_HDR, CHUNK_SIZE, DRIVES, FRAME_HDR, MAX_CLIPBOARD,
                         MSG_CHUNK, MSG_FRAME, MSG_JSON)
@@ -299,6 +299,7 @@ class HostService:
         # Ekran yakalama tek bir iş parçacığında yapılır (mss iş parçacığına bağlıdır).
         self._capture = ThreadPoolExecutor(max_workers=1, thread_name_prefix="capture")
         self._sig = None
+        self.nat = "unknown"           # ağ türü: ok | symmetric | blocked | unknown
         self._seen = {}                # işlenen teklif no -> zaman
         self._tasks = set()
 
@@ -356,7 +357,14 @@ class HostService:
         await self._sig.subscribe(topic_base(host_id) + "/offer")
         self._sig.start()
         try:
-            await asyncio.Future()
+            while True:   # ağ değişebilir (Wi-Fi/mobil); ağ türü düzenli denetlenir
+                if self.config.ice_servers:
+                    result = await nat.detect()
+                    if result != self.nat:
+                        self.nat = result
+                        log.info("ağ türü: %s", nat.NAT_TEXT[result])
+                        self.on_change()
+                await asyncio.sleep(300 if self.nat == "ok" else 60)
         finally:
             await self._sig.stop()
 
@@ -364,7 +372,7 @@ class HostService:
         session = None
         try:
             transport = await p2p.host_answer(self._sig, self.config.host_id, sid, offer_sdp,
-                                              self.config.ice_servers)
+                                              self.config.ice_servers, self.nat)
         except (p2p.P2PError, asyncio.TimeoutError):
             return log.info("bir bağlantı isteği geldi ancak doğrudan bağlantı kurulamadı")
         except Exception as e:
