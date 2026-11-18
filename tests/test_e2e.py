@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from PIL import Image, ImageDraw
 
+from pyremote import fix_console
 from pyremote.config import Config
 from pyremote.host.backend import Backend
 from pyremote.host.service import HostService
@@ -254,4 +255,5 @@ async def main():
 
 
 if __name__ == "__main__":
+    fix_console()
     asyncio.run(main())

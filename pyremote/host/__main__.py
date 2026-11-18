@@ -4,6 +4,7 @@ import asyncio
 import getpass
 import logging
 
+from .. import fix_console
 from .. import crypto
 from ..config import Config, format_id
 from .backend import default_backend
@@ -18,6 +19,7 @@ def main():
                     help="gözetimsiz erişim için kalıcı parola ayarla ve çık")
     ap.add_argument("--clear-password", action="store_true", help="kalıcı parolayı kaldır ve çık")
     args = ap.parse_args()
+    fix_console()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     config = Config()

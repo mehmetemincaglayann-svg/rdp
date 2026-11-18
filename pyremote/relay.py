@@ -20,6 +20,7 @@ from pathlib import Path
 from websockets.asyncio.server import serve
 from websockets.exceptions import ConnectionClosed
 
+from . import fix_console
 from .protocol import MAX_WS_MESSAGE
 
 log = logging.getLogger("relay")
@@ -183,6 +184,7 @@ def main():
     ap.add_argument("--cert", help="TLS sertifikası (wss:// için)")
     ap.add_argument("--key", help="TLS özel anahtarı")
     args = ap.parse_args()
+    fix_console()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     ctx = None
     if args.cert:
