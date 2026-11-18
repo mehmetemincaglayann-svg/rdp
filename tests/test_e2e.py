@@ -76,7 +76,7 @@ class Collector:
 
 
 async def main():
-    tmp = Path(tempfile.mkdtemp())
+    tmp = Path(tempfile.mkdtemp()).resolve()
     relay_url = f"ws://127.0.0.1:{PORT}"
     ready = asyncio.Event()
     relay_task = asyncio.create_task(run_relay("127.0.0.1", PORT, tmp / "reg.json", ready=ready))
