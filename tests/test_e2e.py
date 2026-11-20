@@ -85,6 +85,7 @@ async def main():
     cfg = Config(tmp / "config.json")
     # Ölü bir sunucu da listede: biri çalışmasa bile bağlantı kurulabilmeli.
     cfg.data["brokers"] = ["ws://127.0.0.1:1", f"ws://127.0.0.1:{PORT}"]
+    cfg.data["direct_port"] = PORT + 1
     cfg.data["ice_servers"] = []      # test yerel ağda çalışır, STUN gerekmez
     cfg.save()
     backend = FakeBackend()
@@ -265,6 +266,41 @@ async def main():
     assert payload == big
     await c3.close()
     print("ok  2,5 MB'lık tek ileti parçalanıp eksiksiz ulaştı")
+
+    # 14) doğrudan IP:port bağlantısı (tanışma sunucusu ve ID kullanılmadan)
+    from pyremote.config import parse_target
+    assert parse_target("123 456 789") == ("id", "123456789")
+    assert parse_target("192.168.1.20") == ("direct", ("192.168.1.20", 47600))
+    assert parse_target("ev.ornek.com:5000") == ("direct", ("ev.ornek.com", 5000))
+    assert parse_target("12345") is None and parse_target("a b") is None
+    assert host.direct_port == PORT + 1
+    try:
+        await ViewerClient(cfg, "", "yanlis", Collector(), address=("127.0.0.1", PORT + 1)).connect()
+        raise AssertionError("doğrudan bağlantıda yanlış parola kabul edildi")
+    except ConnectError as e:
+        assert "Parola" in str(e), e
+    host.guard.success()
+    col4 = Collector()
+    c4 = ViewerClient(cfg, "", host.session_password, col4, address=("127.0.0.1", PORT + 1))
+    await c4.connect()
+    r4 = asyncio.create_task(c4.run())
+    f = await col4.wait(lambda n, k: n == "frame")
+    assert f["size"] == (640, 480)
+    backend.events.clear()
+    await c4.send({"t": "move", "x": 0.3, "y": 0.7})
+    for _ in range(100):
+        if backend.events:
+            break
+        await asyncio.sleep(0.02)
+    assert ("move", 0, 0.3, 0.7) in backend.events
+    await c4.close()
+    await r4
+    try:
+        await ViewerClient(cfg, "", "x", Collector(), address=("127.0.0.1", 9)).connect()
+        raise AssertionError
+    except ConnectError as e:
+        assert "ulaşılamadı" in str(e)
+    print("ok  doğrudan IP:port bağlantısı: parola denetimi, ekran ve fare çalıştı")
 
     host_task.cancel()
     await asyncio.gather(host_task, return_exceptions=True)

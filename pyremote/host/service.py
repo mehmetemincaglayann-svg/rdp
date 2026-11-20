@@ -11,13 +11,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from PIL import Image, ImageChops
+from websockets.asyncio.server import serve
 
 from .. import crypto, nat, p2p
 from ..config import Config
 from ..protocol import (CHUNK_HDR, CHUNK_SIZE, DRIVES, FRAME_HDR, MAX_CLIPBOARD,
                         MSG_CHUNK, MSG_FRAME, MSG_JSON)
 from ..signaling import Signaling, topic_base, unseal
-from ..transport import Closed
+from ..transport import Closed, WsTransport
 from .backend import Backend
 
 log = logging.getLogger("host")
@@ -299,7 +300,9 @@ class HostService:
         # Ekran yakalama tek bir iş parçacığında yapılır (mss iş parçacığına bağlıdır).
         self._capture = ThreadPoolExecutor(max_workers=1, thread_name_prefix="capture")
         self._sig = None
+        self.direct_port = None        # doğrudan bağlantı için dinlenen bağlantı noktası
         self.nat = "unknown"           # ağ türü: ok | symmetric | blocked | unknown
+        self._direct_count = 0
         self._seen = {}                # işlenen teklif no -> zaman
         self._tasks = set()
 
@@ -356,6 +359,16 @@ class HostService:
         self._sig = Signaling(self.config.brokers, on_message, on_change)
         await self._sig.subscribe(topic_base(host_id) + "/offer")
         self._sig.start()
+        server = None
+        if self.config.direct_port:
+            try:
+                server = await serve(self._direct, "0.0.0.0", self.config.direct_port,
+                                     max_size=32 * 1024 * 1024)
+                self.direct_port = self.config.direct_port
+                log.info("doğrudan bağlantı dinleniyor: %s", self.direct_port)
+                self.on_change()
+            except OSError as e:
+                log.warning("doğrudan bağlantı dinlenemiyor (%s): %s", self.config.direct_port, e)
         try:
             while True:   # ağ değişebilir (Wi-Fi/mobil); ağ türü düzenli denetlenir
                 if self.config.ice_servers:
@@ -366,10 +379,25 @@ class HostService:
                         self.on_change()
                 await asyncio.sleep(300 if self.nat == "ok" else 60)
         finally:
+            if server:
+                server.close()
             await self._sig.stop()
 
+    async def _direct(self, ws):
+        """IP:port ile doğrudan gelen bağlantı. Aracı yoktur; parola yine doğrulanır."""
+        if len(self._tasks) + self._direct_count >= MAX_PENDING:
+            return
+        self._direct_count += 1
+        try:
+            # Parola anahtarı ID ile tuzlandığından izleyiciye ID bildirilir (gizli değildir).
+            await ws.send(json.dumps({"id": self.config.host_id}))
+            await self._serve(WsTransport(ws))
+        except Exception:
+            pass
+        finally:
+            self._direct_count -= 1
+
     async def _accept(self, sid: str, offer_sdp: str):
-        session = None
         try:
             transport = await p2p.host_answer(self._sig, self.config.host_id, sid, offer_sdp,
                                               self.config.ice_servers, self.nat)
@@ -377,6 +405,11 @@ class HostService:
             return log.info("bir bağlantı isteği geldi ancak doğrudan bağlantı kurulamadı")
         except Exception as e:
             return log.warning("bağlantı teklifi işlenemedi: %r", e)
+        await self._serve(transport)
+
+    async def _serve(self, transport):
+        """Kurulmuş bir bağlantıda parolayı doğrular ve oturumu yürütür."""
+        session = None
         peer = transport.peer_address()
         try:
             passwords = {"session": self._session_key, "permanent": self.config.permanent_key}

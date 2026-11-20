@@ -4,7 +4,7 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
-from ..config import Config, format_id
+from ..config import Config, format_id, local_ip
 from ..nat import NAT_TEXT
 from .backend import Backend
 from .service import HostService
@@ -58,13 +58,18 @@ class HostApp:
                                                          sticky="w", **pad)
         self.perm_btn = ttk.Button(main, command=self._toggle_permanent)
         self.perm_btn.grid(row=5, column=2, **pad)
+        ttk.Label(main, text="Doğrudan adres").grid(row=8, column=0, sticky="w", **pad)
+        self.addr_var = tk.StringVar(master=self.root)
+        ttk.Entry(main, textvariable=self.addr_var, state="readonly", width=22, justify="center"
+                  ).grid(row=8, column=1, columnspan=2, sticky="ew", **pad)
+        self._ip, self._ip_tick = local_ip(), 0
         self.nat_var = tk.StringVar(master=self.root)
         self.nat_label = ttk.Label(main, textvariable=self.nat_var, wraplength=400)
-        self.nat_label.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
+        self.nat_label.grid(row=9, column=0, columnspan=3, sticky="w", **pad)
         if not self.service.backend.can_control:
             ttk.Label(main, text="Bu işletim sisteminde yalnızca ekran izlenebilir "
                                  "(fare/klavye kontrolü Windows'ta çalışır).",
-                      foreground="#a00", wraplength=380).grid(row=7, column=0, columnspan=3, **pad)
+                      foreground="#a00", wraplength=380).grid(row=10, column=0, columnspan=3, **pad)
 
     def _refresh(self):
         s = self.service
@@ -81,6 +86,13 @@ class HostApp:
             self.status.config(text=("● " if ok else "○ ") + STATUS_TEXT[s.status],
                                bg="#e8f5e9" if ok else "#fff3e0", fg="#1b5e20" if ok else "#e65100")
             self.kick_btn.state(["disabled"])
+        self._ip_tick += 1
+        if self._ip_tick % 30 == 0:      # ağ değişmiş olabilir
+            self._ip = local_ip()
+        if s.direct_port and self._ip:
+            self.addr_var.set(f"{self._ip}:{s.direct_port}")
+        else:
+            self.addr_var.set("kapalı" if not s.direct_port else "ağ bağlantısı yok")
         self.nat_var.set("Ağ türü: " + NAT_TEXT.get(s.nat, s.nat))
         self.nat_label.config(foreground="#a00" if s.nat in ("symmetric", "blocked") else "#666")
         has_perm = self.config.permanent_key is not None

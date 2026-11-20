@@ -6,10 +6,11 @@ import os
 from pathlib import Path
 
 from PIL import Image
+from websockets.asyncio.client import connect as ws_connect
 
 from .. import crypto, p2p
 from ..protocol import CHUNK_HDR, CHUNK_SIZE, FRAME_HDR, MSG_CHUNK, MSG_FRAME, MSG_JSON
-from ..transport import Closed
+from ..transport import Closed, WsTransport
 
 ERRORS = {
     "no_signal": "Tanışma sunucularına ulaşılamadı. İnternet bağlantınızı kontrol edin.",
@@ -51,9 +52,11 @@ class ViewerClient:
     Olaylar: info, frame, clip, ls_result, progress, file_done, file_error
     """
 
-    def __init__(self, config, host_id: str, password: str, on_event):
+    def __init__(self, config, host_id: str, password: str, on_event, address=None):
+        """address verilirse ((ip, port)) ID yerine doğrudan o adrese bağlanılır."""
         self.config = config
         self.host_id = host_id
+        self.address = address
         self.password = password
         self.on_event = on_event
         self.chan = None
@@ -61,7 +64,28 @@ class ViewerClient:
         self._downloads = {}   # aktarım no -> {"f", "path", "size", "got"}
         self._uploads = {}     # aktarım no -> Future (ana makinenin onayı)
 
+    async def _connect_direct(self) -> WsTransport:
+        host, port = self.address
+        url = f"ws://[{host}]:{port}" if ":" in host else f"ws://{host}:{port}"
+        try:
+            ws = await ws_connect(url, max_size=32 * 1024 * 1024, open_timeout=10, proxy=None)
+        except Exception as e:
+            raise ConnectError(
+                f"{host}:{port} adresine ulaşılamadı. Adresi, karşı tarafta PyRemote'un açık "
+                "olduğunu ve güvenlik duvarının/modemin bu bağlantı noktasına izin verdiğini "
+                "kontrol edin.") from e
+        try:
+            hello = json.loads(await asyncio.wait_for(ws.recv(), 10))
+            self.host_id = str(hello["id"])
+        except Exception as e:
+            await ws.close()
+            raise ConnectError("Bu adresteki program PyRemote değil ya da yanıt vermedi.") from e
+        return WsTransport(ws)
+
     async def connect(self):
+        if self.address:
+            transport = await self._connect_direct()
+            return await self._handshake(transport)
         try:
             transport = await p2p.viewer_connect(self.host_id, self.config.brokers,
                                                  self.config.ice_servers)
@@ -69,6 +93,9 @@ class ViewerClient:
             if str(e) == "p2p_failed":
                 raise ConnectError(explain_p2p_failure(e.viewer_nat, e.host_nat)) from e
             raise ConnectError(ERRORS.get(str(e), str(e))) from e
+        await self._handshake(transport)
+
+    async def _handshake(self, transport):
         try:
             self.chan = await crypto.viewer_handshake(transport, self.password, self.host_id)
         except crypto.AuthError as e:

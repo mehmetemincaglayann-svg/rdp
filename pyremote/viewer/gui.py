@@ -8,7 +8,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from PIL import Image, ImageTk
 
-from ..config import Config, format_id, normalize_id
+from ..config import Config, format_id, parse_target
 from ..protocol import MAX_CLIPBOARD
 from .client import ConnectError, ViewerClient
 
@@ -41,11 +41,11 @@ def human_size(n: int) -> str:
 class Net:
     """Ağ işlemlerini ayrı bir iş parçacığında yürütür; olayları kuyruğa koyar."""
 
-    def __init__(self, config, host_id, password, events: queue.Queue):
+    def __init__(self, config, host_id, password, events: queue.Queue, address=None):
         self.events = events
         self.loop = asyncio.new_event_loop()
         self.client = ViewerClient(config, host_id, password,
-                                   lambda ev, **kw: events.put((ev, kw)))
+                                   lambda ev, **kw: events.put((ev, kw)), address)
         threading.Thread(target=self._main, daemon=True).start()
 
     def _main(self):
@@ -161,9 +161,9 @@ class ViewerApp:
         f.pack(expand=True)
         ttk.Label(f, text="Uzak bilgisayara bağlan", font=("Segoe UI", 14, "bold")
                   ).grid(row=0, column=0, columnspan=2, pady=(0, 14))
-        self.id_var = tk.StringVar(master=self.root, value=format_id(self.config.data.get("last_id", "")))
+        self.id_var = tk.StringVar(master=self.root, value=self.config.data.get("last_target", ""))
         self.pw_var = tk.StringVar(master=self.root)
-        for row, (label, var, show) in enumerate((("Karşı tarafın ID'si", self.id_var, ""),
+        for row, (label, var, show) in enumerate((("ID ya da IP adresi", self.id_var, ""),
                                                   ("Parola", self.pw_var, "•")), start=1):
             ttk.Label(f, text=label).grid(row=row, column=0, sticky="w", padx=6, pady=5)
             e = ttk.Entry(f, textvariable=var, show=show, width=30)
@@ -177,15 +177,19 @@ class ViewerApp:
         self.connect_msg.grid(row=5, column=0, columnspan=2)
 
     def _connect(self):
-        host_id = normalize_id(self.id_var.get())
-        if len(host_id) != 9 or not self.pw_var.get():
-            return self.connect_msg.config(text="9 haneli ID'yi ve parolayı girin.")
-        self.config.data["last_id"] = host_id
+        target = parse_target(self.id_var.get())
+        if target is None or not self.pw_var.get():
+            return self.connect_msg.config(
+                text="9 haneli ID'yi ya da IP adresini (ör. 192.168.1.20) ve parolayı girin.",
+                foreground="#a00")
+        kind, value = target
+        self.config.data["last_target"] = format_id(value) if kind == "id" else self.id_var.get().strip()
         self.config.save()
         self.connect_btn.state(["disabled"])
-        self.connect_msg.config(text="Bağlanılıyor… (bu 10-20 saniye sürebilir)",
-                                foreground="#444")
-        self.net = Net(self.config, host_id, self.pw_var.get(), self.events)
+        self.connect_msg.config(text="Bağlanılıyor…" if kind == "direct" else
+                                "Bağlanılıyor… (bu 10-20 saniye sürebilir)", foreground="#444")
+        self.net = Net(self.config, value if kind == "id" else "", self.pw_var.get(), self.events,
+                       value if kind == "direct" else None)
 
     # --- oturum ekranı -------------------------------------------------
     def _build_session(self):

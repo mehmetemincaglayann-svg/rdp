@@ -14,6 +14,7 @@ DEFAULT_BROKERS = [
 # Genel IP adresini öğrenmek için STUN sunucuları. İsteğe bağlı olarak buraya
 # {"urls": "turn:...", "username": "...", "credential": "..."} biçiminde bir TURN
 # sunucusu da eklenebilir (doğrudan bağlantının kurulamadığı ağlar için).
+DEFAULT_DIRECT_PORT = 47600   # doğrudan (IP:port) bağlantı için dinlenen TCP bağlantı noktası
 DEFAULT_ICE_SERVERS = [
     {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]},
     {"urls": ["stun:stun.cloudflare.com:3478"]},
@@ -71,6 +72,12 @@ class Config:
         return v if isinstance(v, list) else DEFAULT_ICE_SERVERS
 
     @property
+    def direct_port(self) -> int:
+        """0 verilirse doğrudan bağlantı dinleme kapatılır."""
+        v = self.data.get("direct_port")
+        return v if isinstance(v, int) else DEFAULT_DIRECT_PORT
+
+    @property
     def host_id(self) -> str:
         return self.data["host_id"]
 
@@ -86,3 +93,37 @@ class Config:
         else:
             self.data["permanent_key"] = key.hex()
         self.save()
+
+
+def parse_target(text: str):
+    """Kullanıcının yazdığı hedefi çözer.
+
+    9 haneli ID -> ("id", "123456789")
+    IP ya da alan adı, isteğe bağlı :port -> ("direct", ("192.168.1.20", 47600))
+    Geçersizse None.
+    """
+    text = text.strip()
+    digits = normalize_id(text)
+    if digits and all(c.isdigit() or c.isspace() or c == "-" for c in text):
+        return ("id", digits) if len(digits) == 9 else None
+    if not text or any(c.isspace() for c in text) or "/" in text:
+        return None
+    host, sep, port = text.rpartition(":")
+    if not sep:
+        return ("direct", (text, DEFAULT_DIRECT_PORT))
+    if not host or not port.isdigit() or not 0 < int(port) < 65536:
+        return None
+    return ("direct", (host, int(port)))
+
+
+def local_ip() -> str | None:
+    """Bu bilgisayarın yerel ağdaki IP adresi (paket gönderilmez)."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("192.0.2.1", 9))
+        return s.getsockname()[0]
+    except OSError:
+        return None
+    finally:
+        s.close()

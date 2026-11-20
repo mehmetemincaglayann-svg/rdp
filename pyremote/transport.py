@@ -105,3 +105,35 @@ class DataChannelTransport:
             return str(conn._nominated[1].remote_addr[0])
         except Exception:
             return "?"
+
+
+class WsTransport:
+    """Doğrudan (IP:port) bağlantıda kullanılan WebSocket taşıyıcısı."""
+
+    def __init__(self, ws):
+        self.ws = ws
+
+    async def send(self, data):
+        try:
+            await self.ws.send(data)
+        except Exception as e:
+            raise Closed() from e
+
+    async def recv(self) -> bytes:
+        try:
+            data = await self.ws.recv()
+        except Exception as e:
+            raise Closed() from e
+        return data.encode("utf-8") if isinstance(data, str) else data
+
+    async def close(self):
+        try:
+            await self.ws.close()
+        except Exception:
+            pass
+
+    def peer_address(self) -> str:
+        try:
+            return str(self.ws.remote_address[0])
+        except Exception:
+            return "?"

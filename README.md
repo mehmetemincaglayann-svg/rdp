@@ -37,6 +37,31 @@ python -m pyremote.host
 python -m pyremote.viewer
 ```
 
+## İki bağlanma yolu
+
+İzleyicide "ID ya da IP adresi" alanına ikisinden biri yazılır:
+
+| | ID ile (ör. `431 042 125`) | IP adresi ile (ör. `192.168.1.20`) |
+|---|---|---|
+| Aracı servis | Tanışma için ücretsiz açık servisler | Hiçbiri |
+| Aynı ağda | Çalışır | Çalışır, en hızlı ve en basit yol |
+| Farklı ağlarda | İki ağ da uygunsa çalışır | Ana makinenin modeminde port yönlendirme gerekir |
+| Adres değişirse | ID sabit kalır | Yeni IP adresini bilmeniz gerekir |
+
+### IP adresi ile doğrudan bağlantı
+
+Ana makine penceresindeki **Doğrudan adres** satırı (ör. `192.168.1.20:47600`) aynı
+ağdaki bilgisayarlardan doğrudan kullanılabilir. İlk açılışta Windows Güvenlik Duvarı
+izin isterse onaylayın.
+
+Farklı bir ağdan bağlanmak için ana makinenin modeminde 47600 numaralı TCP bağlantı
+noktasını ana makinenin yerel IP adresine yönlendirin ve izleyicide modemin genel IP
+adresini yazın. Bu yol ancak internet sağlayıcınız size gerçek bir genel IP veriyorsa
+çalışır (CGNAT arkasında çalışmaz). Bağlantı noktası ayar dosyasındaki `direct_port`
+ile değiştirilir; `0` yazılırsa dinleme kapatılır.
+
+Her iki yolda da parola doğrulaması ve uçtan uca şifreleme aynıdır.
+
 ## Bağlantı nasıl kuruluyor?
 
 Farklı ağlardaki iki bilgisayar modemlerin (NAT) arkasında olduğundan birbirinin
